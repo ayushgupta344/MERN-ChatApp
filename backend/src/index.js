@@ -5,6 +5,7 @@ import { clerkMiddleware } from "@clerk/express";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
+import job from "./lib/cron.js";
 dotenv.config();
 const app = express();
 const FRONTEND_URL = process.env.FRONTEND_URL;
