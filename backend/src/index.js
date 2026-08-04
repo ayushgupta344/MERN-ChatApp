@@ -15,7 +15,7 @@ app.use(cors(
   credentials:true}
 ));
 app.use(clerkMiddleware()); 
-app.get('/', (req, res) => {
+app.get('/health', (req, res) => {
   res.send('Hello World!');
 });
 if (fs.existsSync(publicDir)) {
