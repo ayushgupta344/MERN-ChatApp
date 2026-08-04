@@ -7,6 +7,7 @@ import fs from "fs";
 import path from "path";
 import job from "./lib/cron.js";
 import clerkWebhook from "./webhooks/clerk.webhook.js";
+import authRouter from "./routes/auth.routes.js";
 dotenv.config();
 const app = express();
 const FRONTEND_URL = process.env.FRONTEND_URL;
@@ -25,6 +26,7 @@ app.use(clerkMiddleware());
 app.get('/health', (req, res) => {
   res.send('Hello World!');
 });
+app.use('/api/auth',authRouter);
 if (fs.existsSync(publicDir)) {
   app.use(express.static(publicDir));
 
