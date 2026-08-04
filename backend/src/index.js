@@ -2,18 +2,30 @@ import express from "express";
 import dotenv from "dotenv";
 import { connectDB } from "./lib/db.js";
 import { clerkMiddleware } from "@clerk/express";
-import cors from "cors"; 
+import cors from "cors";
+import fs from "fs";
+import path from "path";
 dotenv.config();
 const app = express();
-app.get('/', (req, res) => {
-  res.send('Hello World!');
-});
+const FRONTEND_URL = process.env.FRONTEND_URL;
+const publicDir = path.join(process.cwd(), "public");
 app.use(express.json());
 app.use(cors(
   {origin:process.env.FRONTEND_URL,
   credentials:true}
 ));
 app.use(clerkMiddleware()); 
+app.get('/', (req, res) => {
+  res.send('Hello World!');
+});
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir));
+
+  app.get("/{*any}", (req, res, next) => {
+    res.sendFile(path.join(publicDir, "index.html"), (err) => next(err));
+  });
+}
+
 app.listen(process.env.PORT, () => {
   connectDB();
   console.log(`Server is running on port ${process.env.PORT}`);
