@@ -1,5 +1,5 @@
 import express from "express";
-import dotenv from "dotenv";
+import dotenv from "dotenv/config";
 import { connectDB } from "./lib/db.js";
 import { clerkMiddleware } from "@clerk/express";
 import cors from "cors";
@@ -8,7 +8,7 @@ import path from "path";
 import job from "./lib/cron.js";
 import clerkWebhook from "./webhooks/clerk.webhook.js";
 import authRouter from "./routes/auth.routes.js";
-dotenv.config();
+import messageRouter from "./routes/message.routes.js";
 const app = express();
 const FRONTEND_URL = process.env.FRONTEND_URL;
 const publicDir = path.join(process.cwd(), "public");
@@ -27,6 +27,7 @@ app.get('/health', (req, res) => {
   res.send('Hello World!');
 });
 app.use('/api/auth',authRouter);
+app.use('/api/messages',messageRouter); 
 if (fs.existsSync(publicDir)) {
   app.use(express.static(publicDir));
 
