@@ -14,6 +14,7 @@ const messageSchema = new mongoose.Schema(
     },
     text: {
       type: String,
+      maxlength: [2000, "Message cannot exceed 2000 characters"],
     },
     image: {
       type: String,

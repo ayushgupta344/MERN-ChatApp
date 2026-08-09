@@ -35,7 +35,7 @@ export const useChatStore = create(
                 : null,
           }));
         } catch (error) {
-          console.log("Error in get Users", error.message);
+          console.error("Error in getUsers:", error.message);
         } finally {
           set({ isUsersLoading: false });
         }
@@ -47,7 +47,7 @@ export const useChatStore = create(
           const res = await axiosInstance.get("/messages/conversations");
           set({ conversations: res.data });
         } catch (error) {
-          console.log("Error in getConversations", error.message);
+          console.error("Error in getConversations:", error.message);
         } finally {
           set({ isConversationsLoading: false });
         }
@@ -78,7 +78,29 @@ export const useChatStore = create(
             messageData,
           );
           set({ messages: [...messages, res.data], composerText: "" });
-          get().getConversations();
+
+          // Optimistically move this conversation to the top of the sidebar
+          // instead of re-fetching the entire list from the server.
+          set((state) => {
+            const partnerId = String(selectedUser._id);
+            const alreadyInConversations = state.conversations.some(
+              (c) => String(c._id) === partnerId,
+            );
+            if (alreadyInConversations) {
+              // Bring existing conversation to the top
+              const updated = state.conversations.filter(
+                (c) => String(c._id) !== partnerId,
+              );
+              const existing = state.conversations.find(
+                (c) => String(c._id) === partnerId,
+              );
+              return { conversations: [existing, ...updated] };
+            } else {
+              // New conversation — add the selectedUser to the top
+              return { conversations: [selectedUser, ...state.conversations] };
+            }
+          });
+
           return true;
         } catch (error) {
           toast.error(
@@ -88,26 +110,69 @@ export const useChatStore = create(
         }
       },
 
+      // ─────────────────────────────────────────────────────────────────────
+      // FIX: Use a named handler stored on the store so we can remove only
+      // THIS specific listener (not all "newMessage" listeners globally).
+      // This prevents the React Strict Mode double-invoke race condition.
+      // ─────────────────────────────────────────────────────────────────────
+      _newMessageHandler: null,
+
       subscribeToMessages: (userId) => {
         if (!userId) return;
 
         const socket = useAuthStore.getState().socket;
         if (!socket) return;
 
-        socket.off("newMessage");
-        socket.on("newMessage", (newMessage) => {
-          // if im not the receiver don't do anything just return
-          if (String(newMessage.senderId) !== String(userId)) return;
+        // Remove the previous named handler if one exists, safely.
+        const prevHandler = get()._newMessageHandler;
+        if (prevHandler) {
+          socket.off("newMessage", prevHandler);
+        }
 
-          set({ messages: [...get().messages, newMessage] });
+        // Create a new named handler scoped to the current userId (conversation partner).
+        const handler = (newMessage) => {
+          const senderIdStr = String(newMessage.senderId);
+          const receiverIdStr = String(newMessage.receiverId);
+          const userIdStr = String(userId);
+          const myId = String(useAuthStore.getState().authUser?._id);
 
-          get().getConversations();
-        });
+          // Only append the message if it belongs to the active conversation:
+          // Either they sent it to me, or I sent it to them (for multi-tab support).
+          const isRelevant =
+            (senderIdStr === userIdStr && receiverIdStr === myId) ||
+            (senderIdStr === myId && receiverIdStr === userIdStr);
+
+          if (!isRelevant) return;
+
+          set((state) => ({ messages: [...state.messages, newMessage] }));
+
+          // Bring this conversation to the top of the sidebar optimistically.
+          set((state) => {
+            const partnerId = userIdStr;
+            const updated = state.conversations.filter(
+              (c) => String(c._id) !== partnerId,
+            );
+            const existing = state.conversations.find(
+              (c) => String(c._id) === partnerId,
+            );
+            if (existing) {
+              return { conversations: [existing, ...updated] };
+            }
+            return {};
+          });
+        };
+
+        socket.on("newMessage", handler);
+        set({ _newMessageHandler: handler });
       },
 
       unsubscribeFromMessages: () => {
         const socket = useAuthStore.getState().socket;
-        socket?.off("newMessage");
+        const handler = get()._newMessageHandler;
+        if (socket && handler) {
+          socket.off("newMessage", handler);
+        }
+        set({ _newMessageHandler: null });
       },
 
       setSelectedUser: (selectedUser) => set({ selectedUser }),
@@ -115,12 +180,13 @@ export const useChatStore = create(
       setActiveConversationId: (activeConversationId) => {
         set((state) => ({
           activeConversationId,
-          selectedUser:
-            state.users.find((user) => user._id === activeConversationId) ||
-            state.conversations.find(
-              (user) => user._id === activeConversationId,
-            ) ||
-            null,
+          selectedUser: activeConversationId
+            ? state.users.find((user) => user._id === activeConversationId) ||
+              state.conversations.find(
+                (user) => user._id === activeConversationId,
+              ) ||
+              null
+            : null,
           messages: activeConversationId ? state.messages : [],
         }));
       },
