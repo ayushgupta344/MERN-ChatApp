@@ -30,7 +30,7 @@ export const useChatStore = create(
             users: res.data,
             selectedUser:
               state.selectedUser &&
-              res.data.some((user) => user._id === state.selectedUser._id)
+              res.data.some((user) => String(user._id) === String(state.selectedUser._id))
                 ? state.selectedUser
                 : null,
           }));
@@ -79,15 +79,13 @@ export const useChatStore = create(
           );
           set({ messages: [...messages, res.data], composerText: "" });
 
-          // Optimistically move this conversation to the top of the sidebar
-          // instead of re-fetching the entire list from the server.
+          // Optimistically move this conversation to top of sidebar
           set((state) => {
             const partnerId = String(selectedUser._id);
             const alreadyInConversations = state.conversations.some(
               (c) => String(c._id) === partnerId,
             );
             if (alreadyInConversations) {
-              // Bring existing conversation to the top
               const updated = state.conversations.filter(
                 (c) => String(c._id) !== partnerId,
               );
@@ -96,7 +94,6 @@ export const useChatStore = create(
               );
               return { conversations: [existing, ...updated] };
             } else {
-              // New conversation — add the selectedUser to the top
               return { conversations: [selectedUser, ...state.conversations] };
             }
           });
@@ -111,68 +108,63 @@ export const useChatStore = create(
       },
 
       // ─────────────────────────────────────────────────────────────────────
-      // FIX: Use a named handler stored on the store so we can remove only
-      // THIS specific listener (not all "newMessage" listeners globally).
-      // This prevents the React Strict Mode double-invoke race condition.
+      // GLOBAL REAL-TIME SOCKET LISTENER:
+      // Listens for ALL incoming messages across the entire app.
+      // Updates active chat messages AND sidebar conversations automatically!
       // ─────────────────────────────────────────────────────────────────────
-      _newMessageHandler: null,
-
-      subscribeToMessages: (userId) => {
-        if (!userId) return;
-
-        const socket = useAuthStore.getState().socket;
+      initSocketListener: (socket) => {
         if (!socket) return;
 
-        // Remove the previous named handler if one exists, safely.
-        const prevHandler = get()._newMessageHandler;
-        if (prevHandler) {
-          socket.off("newMessage", prevHandler);
-        }
+        // Clean up previous listener to prevent duplicates
+        socket.off("newMessage");
 
-        // Create a new named handler scoped to the current userId (conversation partner).
-        const handler = (newMessage) => {
+        socket.on("newMessage", (newMessage) => {
+          const { activeConversationId, conversations, users } = get();
           const senderIdStr = String(newMessage.senderId);
           const receiverIdStr = String(newMessage.receiverId);
-          const userIdStr = String(userId);
           const myId = String(useAuthStore.getState().authUser?._id);
+          const currentActiveIdStr = activeConversationId ? String(activeConversationId) : null;
 
-          // Only append the message if it belongs to the active conversation:
-          // Either they sent it to me, or I sent it to them (for multi-tab support).
-          const isRelevant =
-            (senderIdStr === userIdStr && receiverIdStr === myId) ||
-            (senderIdStr === myId && receiverIdStr === userIdStr);
+          // 1. If the message belongs to the currently active conversation, append it
+          const isForCurrentChat =
+            currentActiveIdStr &&
+            ((senderIdStr === currentActiveIdStr && receiverIdStr === myId) ||
+              (senderIdStr === myId && receiverIdStr === currentActiveIdStr));
 
-          if (!isRelevant) return;
+          if (isForCurrentChat) {
+            set((state) => ({ messages: [...state.messages, newMessage] }));
+          }
 
-          set((state) => ({ messages: [...state.messages, newMessage] }));
+          // 2. Always move the chat partner to the top of the sidebar list
+          const partnerId = senderIdStr === myId ? receiverIdStr : senderIdStr;
 
-          // Bring this conversation to the top of the sidebar optimistically.
           set((state) => {
-            const partnerId = userIdStr;
-            const updated = state.conversations.filter(
-              (c) => String(c._id) !== partnerId,
-            );
-            const existing = state.conversations.find(
+            const existingConv = state.conversations.find(
               (c) => String(c._id) === partnerId,
             );
-            if (existing) {
-              return { conversations: [existing, ...updated] };
-            }
-            return {};
-          });
-        };
+            const userObj =
+              existingConv || state.users.find((u) => String(u._id) === partnerId);
 
-        socket.on("newMessage", handler);
-        set({ _newMessageHandler: handler });
+            if (!userObj) return {};
+
+            const filteredConvs = state.conversations.filter(
+              (c) => String(c._id) !== partnerId,
+            );
+            return { conversations: [userObj, ...filteredConvs] };
+          });
+        });
+      },
+
+      subscribeToMessages: (userId) => {
+        // Fallback for component compatibility: binds listener if socket is ready
+        const socket = useAuthStore.getState().socket;
+        if (socket) {
+          get().initSocketListener(socket);
+        }
       },
 
       unsubscribeFromMessages: () => {
-        const socket = useAuthStore.getState().socket;
-        const handler = get()._newMessageHandler;
-        if (socket && handler) {
-          socket.off("newMessage", handler);
-        }
-        set({ _newMessageHandler: null });
+        // No-op for global listener so real-time background notifications work smoothly
       },
 
       setSelectedUser: (selectedUser) => set({ selectedUser }),
@@ -181,9 +173,9 @@ export const useChatStore = create(
         set((state) => ({
           activeConversationId,
           selectedUser: activeConversationId
-            ? state.users.find((user) => user._id === activeConversationId) ||
+            ? state.users.find((user) => String(user._id) === String(activeConversationId)) ||
               state.conversations.find(
-                (user) => user._id === activeConversationId,
+                (user) => String(user._id) === String(activeConversationId),
               ) ||
               null
             : null,
