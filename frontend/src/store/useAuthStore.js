@@ -13,15 +13,10 @@ export const useAuthStore = create((set, get) => ({
 
   checkAuth: async () => {
     set({ isCheckingAuth: true });
-
     try {
       const res = await axiosInstance.get("/auth/check");
       set({ authUser: res.data });
-
-      // Only connect if not already connected (avoids duplicate sockets on re-auth)
-      if (!get().socket?.connected) {
-        get().connectSocket(res.data);
-      }
+      get().connectSocket(res.data);
     } catch (error) {
       console.error("Error in checkAuth:", error);
       set({ authUser: null });
@@ -38,40 +33,50 @@ export const useAuthStore = create((set, get) => ({
   connectSocket: (user) => {
     if (!user) return;
 
-    // If a socket already exists and is connected, do nothing
-    const existingSocket = get().socket;
-    if (existingSocket?.connected) return;
-
-    // If a socket exists but is disconnected (e.g. network drop), clean it up first
-    if (existingSocket) {
-      existingSocket.disconnect();
-    }
+    // ─── FIX: NEVER recreate a socket that already exists ──────────────────
+    // Previous code checked `socket?.connected` which is false while the socket
+    // is still in the "connecting" state. That caused the old socket to be
+    // disconnected and a NEW socket to be created — silently destroying any
+    // message handlers that were registered on the old socket object.
+    // Now we guard on the presence of the socket object itself, not its state.
+    if (get().socket) return;
+    // ───────────────────────────────────────────────────────────────────────
 
     const socket = io(BASE_URL, {
       query: { userId: user._id },
-      // Automatic reconnection with exponential backoff
+
+      // ─── FIX: Force WebSocket transport on Render ──────────────────────
+      // By default Socket.IO starts with HTTP long-polling then upgrades to
+      // WebSocket. Render's reverse proxy breaks the polling → WS upgrade
+      // path: the HTTP session that owns the socket is lost during the upgrade,
+      // so the server cannot route events to the correct socket anymore.
+      // Forcing 'websocket' skips polling entirely and connects directly,
+      // which works perfectly on Render's infrastructure.
+      transports: ["websocket"],
+      // ───────────────────────────────────────────────────────────────────
+
       reconnection: true,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: Infinity, // Keep trying — don't give up
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      timeout: 10000,
+      timeout: 20000,
     });
 
     set({ socket });
 
     socket.on("connect", () => {
-      console.log("Socket connected:", socket.id);
+      console.log("[Socket] Connected:", socket.id);
     });
 
     socket.on("connect_error", (err) => {
-      console.error("Socket connection error:", err.message);
+      console.error("[Socket] Connection error:", err.message);
     });
 
     socket.on("disconnect", (reason) => {
-      console.warn("Socket disconnected:", reason);
-      // If the server closed the connection, update state so reconnect logic triggers
+      console.warn("[Socket] Disconnected:", reason);
+      // The Socket.IO client auto-reconnects for most reasons.
+      // We only need to manually reconnect when the SERVER forcibly closes us.
       if (reason === "io server disconnect") {
-        // Server intentionally disconnected us — try to reconnect manually
         socket.connect();
       }
     });
@@ -84,7 +89,7 @@ export const useAuthStore = create((set, get) => ({
   disconnectSocket: () => {
     const socket = get().socket;
     if (socket) {
-      socket.off(); // Remove all listeners before disconnecting
+      socket.off(); // remove all event listeners first to prevent memory leaks
       socket.disconnect();
     }
     set({ socket: null, onlineUsers: [] });
